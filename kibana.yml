@@ -1,0 +1,100 @@
+---
+# Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kibana
+  namespace: logging
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kibana
+  template:
+    metadata:
+      labels:
+        app: kibana
+    spec:
+      containers:
+      - name: kibana
+        image: kibana:7.17.9
+        imagePullPolicy: IfNotPresent
+        # resources:
+          # limits:
+          #   cpu: 4000m
+          # requests:
+          #   cpu: 100m
+        env:
+          - name: ELASTICSEARCH_HOSTS
+            value: http://elasticsearch:9200
+          - name: I18N_LOCALE
+            value: zh-CN
+          - name: XPACK_SECURITY_ENABLED
+            value: "true"
+          - name: ELASTICSEARCH_PASSWORD
+            value: M50zLpCI0EeDcOh7
+          - name: ELASTICSEARCH_USERNAME
+            value: kibana            
+        ports:
+        - name: ui
+          containerPort: 5601
+          protocol: TCP
+
+---
+# Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: kibana
+  namespace: logging
+spec:
+  ports:
+    - name: ui
+      port: 5601
+      protocol: TCP
+      targetPort: 5601
+  selector:
+    app: kibana
+  sessionAffinity: None
+  type: ClusterIP
+
+---
+# Secert
+apiVersion: v1
+kind: Secret
+type: kubernetes.io/tls
+metadata:
+  name: xxx-com-tls-secret
+  namespace: logging
+data:
+  tls.crt: LS0xxx
+  tls.key: LS0xxx
+
+---
+# Ingress
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kibana
+  namespace: logging
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    # nginx.ingress.kubernetes.io/auth-type: basic
+    # nginx.ingress.kubernetes.io/auth-secret: basic-auth
+    # nginx.ingress.kubernetes.io/auth-realm: 'Authentication Required - foo'
+spec:
+  tls:
+  - hosts:
+      - kibana.xxx.com
+    secretName: xxx-com-tls-secret
+  rules:
+  - host: kibana.xxx.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: kibana
+            port:
+              number: 5601
