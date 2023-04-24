@@ -1,0 +1,184 @@
+# 目录可读写 chmod 777 -R 
+---
+# PVC
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: elasticsearch
+  namespace: logging
+  labels:
+    app: elasticsearch
+spec:
+  storageClassName: managed-nfs-storage
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 50Gi
+
+---
+# ServiceAccount
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: elasticsearch
+  namespace: logging
+  labels:
+    app: elasticsearch
+
+---
+# ClusterRole
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: elasticsearch
+  labels:
+    app: elasticsearch
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - "services"
+  - "namespaces"
+  - "endpoints"
+  verbs:
+  - "get"
+
+---
+# ClusterRoleBinding
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  namespace: logging
+  name: elasticsearch
+  labels:
+    app: elasticsearch
+subjects:
+- kind: ServiceAccount
+  name: elasticsearch
+  namespace: logging
+  apiGroup: ""
+roleRef:
+  kind: ClusterRole
+  name: elasticsearch
+  apiGroup: ""      
+
+---
+# StatefulSet
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: elasticsearch
+  namespace: logging
+spec:
+  serviceName: elasticsearch
+  replicas: 3
+  selector:
+    matchLabels:
+      app: elasticsearch
+  template:
+    metadata:
+      labels: 
+        app: elasticsearch
+    spec:
+      initContainers:
+      - name: increase-vm-max-map
+        image: busybox
+        imagePullPolicy: IfNotPresent        
+        command: ["sysctl", "-w", "vm.max_map_count=262144"]
+        securityContext:
+          privileged: true
+      - name: increase-fd-ulimit
+        image: busybox
+        imagePullPolicy: IfNotPresent        
+        command: ["sh", "-c", "ulimit -n 65536"]
+        securityContext:
+          privileged: true
+      containers:
+      - name: elasticsearch
+        image: elasticsearch:7.17.9
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: rest
+          containerPort: 9200
+        - name: inter
+          containerPort: 9300
+        # resources:
+        #   limits:
+        #     cpu: 1000m
+        #   requests:
+        #     cpu: 1000m
+        volumeMounts:
+        - name: data
+          mountPath: /usr/share/elasticsearch/data
+        env:
+        - name: cluster.name
+          value: elasticsearch
+        - name: node.name
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: cluster.initial_master_nodes
+          value: "elasticsearch-0,elasticsearch-1,elasticsearch-2"
+        - name: discovery.zen.minimum_master_nodes
+          value: "2"
+        - name: discovery.seed_hosts
+          value: "elasticsearch"
+        - name: node.max_local_storage_nodes
+          value: "3"          
+        # - name: ES_JAVA_OPTS
+        #   value: "-Xms512m -Xmx512m"
+        - name: network.host
+          value: "0.0.0.0"
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: elasticsearch
+
+---
+# Service
+kind: Service
+apiVersion: v1
+metadata:
+  name: elasticsearch
+  namespace: logging
+  labels:
+    app: elasticsearch
+spec:
+  selector:
+    app: elasticsearch
+  clusterIP: None
+  ports:
+    - port: 9200
+      name: rest
+    - port: 9300
+      name: inter-node
+
+
+---
+# 定时清理es日志
+# CronJob
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: es-index-rotator
+  namespace: logging
+spec:
+  # 每天1点3分执行
+  schedule: "3 1 */1 * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: es-index-rotator
+            image: easzlab/es-index-rotator:0.2.1
+            # 保留最近30天日志
+            command:
+            - /bin/rotate.sh
+            - "30"
+            - "logstash"  # fluented 默认创建的index形如'logstash-2020.01.01'
+          restartPolicy: OnFailure
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 1
