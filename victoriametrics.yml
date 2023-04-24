@@ -1,0 +1,80 @@
+# 单节点victoriametrics
+# doc https://docs.victoriametrics.com/?_gl=1*13sbqrq*_ga*MTc5MDI2MzI2OS4xNjgyMjE2OTM4*_ga_N9SVT8S3HK*MTY4MjIxNjkzNy4xLjEuMTY4MjIxNzE2Ny4wLjAuMA..
+
+---
+# PVC
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: victoriametrics
+  namespace: n9e
+  labels:
+    app: victoriametrics
+spec:
+  storageClassName: managed-nfs-storage
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 20Gi
+
+---
+# Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: victoriametrics
+  namespace: n9e
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: victoriametrics
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: victoriametrics
+    spec:
+      containers:
+        - name: victoriametrics
+          image: victoriametrics/victoria-metrics:v1.90.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - -storageDataPath=/var/lib/victoria-metrics-data
+            # - -retentionPeriod=1w 默认保存1个月
+          ports:
+            - containerPort: 8428
+              name: http
+              protocol: TCP
+          volumeMounts:
+            - mountPath: /var/lib/victoria-metrics-data
+              name: data    
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: victoriametrics                
+     
+---
+# Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: victoriametrics
+  namespace: n9e
+spec:
+  ports:
+    - name: victoriametrics
+      port: 8428
+      protocol: TCP
+      targetPort: 8428
+  selector:
+    app: victoriametrics
+  sessionAffinity: None
+  type: ClusterIP
