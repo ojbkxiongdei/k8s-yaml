@@ -1,0 +1,123 @@
+# k8s事件监控
+# doc https://github.com/AliyunContainerService/kube-eventer
+# 可以发送到es，然后n9e读取es，统一告警。
+
+---
+# Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    name: kube-eventer
+  name: kube-eventer
+  namespace: kube-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kube-eventer
+  template:
+    metadata:
+      labels:
+        app: kube-eventer
+      annotations:	
+        priorityClassName: ''
+    spec:
+      dnsPolicy: ClusterFirstWithHostNet
+      serviceAccount: kube-eventer
+      containers:
+        - image: registry.aliyuncs.com/acs/kube-eventer-amd64:v1.2.0-484d9cd-aliyun
+          name: kube-eventer
+          command:
+            - "/kube-eventer"
+            - "--source=kubernetes:https://kubernetes.default"
+            #发送到飞书
+            #- --sink=webhook:https://open.feishu.cn/open-apis/bot/v2/hook/xxxxx?level=Warning&method=POST&header=Content-Type=application/json&custom_body_configmap=custom-body&custom_body_configmap_namespace=kube-system
+            #发送到slack  https://hooks.slack.com/services/xxxx
+            - --sink=webhook:https://hooks.slack.com/services/xxxx?&level=Normal&kinds=Pod&header=Content-Type=application/json&custom_body_configmap=custom-body&custom_body_configmap_namespace=kube-system&method=POST
+          env:
+          - name: TZ
+            value: "Asia/Shanghai" 
+          volumeMounts:
+            - name: localtime
+              mountPath: /etc/localtime
+              readOnly: true
+            - name: zoneinfo
+              mountPath: /usr/share/zoneinfo
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 100Mi
+            limits:
+              cpu: 500m
+              memory: 250Mi
+      volumes:
+        - name: localtime
+          hostPath:
+            path: /etc/localtime
+        - name: zoneinfo
+          hostPath:
+            path: /usr/share/zoneinfo
+
+---
+# ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kube-eventer
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+      - events
+    verbs:
+      - get
+      - list
+      - watch
+
+---
+# ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kube-eventer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kube-eventer
+subjects:
+  - kind: ServiceAccount
+    name: kube-eventer
+    namespace: kube-system
+
+---
+# ServiceAccount
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kube-eventer
+  namespace: kube-system
+
+
+---
+# 发送到slack
+apiVersion: v1
+data:
+  content: '{
+    "channel": "testing",
+    "icon_emoji": ":k8s:",
+    "username": "eventer",
+    "attachments": [
+        {
+            "color": "warning",
+            "text": "*Type*: `{{.Type}}`\n*Namespace*: `{{.InvolvedObject.Namespace}}`\n*Object*: `{{ .InvolvedObject.Kind }}/{{ .InvolvedObject.Name }}`\n*Reason*: `{{ .Reason }}`\n*Meaasge*: `{{ .Message }}`\n*Time*: `{{ .LastTimestamp }}`"
+        }
+    ]
+  }'
+kind: ConfigMap
+metadata:
+  name: custom-body
+  namespace: kube-system
+
