@@ -1,5 +1,7 @@
 # 收集k8s事件发送到es做展示，并使用slack告警
 # doc https://github.com/resmoio/kubernetes-event-exporter
+# 查看索引 curl http://elasticsearch:9200/_cat/indices?v
+# 删除全部索引 curl -XDELETE 'http://elasticsearch:9200/*'
 
 ---
 # ServiceAccount
