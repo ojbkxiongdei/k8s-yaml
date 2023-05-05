@@ -1,0 +1,146 @@
+# 单节点mongodb,pvc持久化数据，带mongo-exporter
+# 创建管理员和授权
+# use admin
+# db.createUser({user:'root',pwd:'klg2go',roles:[{role:'root',db:'admin'}]})
+# db.auth('root','root');
+# 配置文件开启认证
+# 在mongo.conf添加auth=true
+
+---
+# PVC
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: zadig-mongo
+  namespace: zadig
+spec:
+  storageClassName: managed-nfs-storage
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+# ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zadig-mongodb
+  namespace: zadig
+data:
+  mongodb.conf: |
+    dbpath=/data/mongodb
+    logpath=/data/mongodb/mongodb.log
+    pidfilepath=/data/mongodb/master.pid
+    directoryperdb=true
+    logappend=true
+    bind_ip=0.0.0.0
+    port=27017
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zadig-mongodb
+  namespace: zadig
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: zadig-mongodb
+  template:
+    metadata:
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9104"
+      labels:
+        app: zadig-mongodb
+    spec:
+      containers:
+        - name: zadig-mongodb
+          image: mongo:4.2
+          command:
+            - sh
+            - -c
+            - "exec mongod -f /etc/mongod.conf"
+          ports:
+            - containerPort: 27017
+          resources:
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+            requests:
+              cpu: 1000m
+              memory: 512Mi
+          livenessProbe:
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+            tcpSocket:
+              port: 27017
+          readinessProbe:
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+            tcpSocket:
+              port: 27017
+          volumeMounts:
+            - name: data
+              mountPath: /data/mongodb/
+            - name: config
+              mountPath: /etc/mongod.conf
+              subPath: mongodb.conf
+            # - name: localtime
+            #   readOnly: true
+            #   mountPath: /etc/localtime
+        - name: mongo-exporter
+          image: noenv/mongo-exporter:latest
+          args:
+            [
+              "--web.listen-address=:9104",
+              "--mongodb.uri",
+              "mongodb://zadig-mongodb:27017",
+            ]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 100Mi
+          ports:
+            - containerPort: 9104
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: zadig-mongodb
+        - name: config
+          configMap:
+            name: zadig-mongodb
+        # - name: localtime
+        #   hostPath:
+        #     type: File
+        #     path: /etc/localtime
+
+---
+# Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: zadig-mongodb
+  namespace: zadig
+spec:
+  type: ClusterIP
+  ports:
+  - name: zadig-mongodb
+    port: 27017
+    protocol: TCP
+    targetPort: 27017
+  - name: prom
+    port: 9104
+    targetPort: 9104
+  selector:
+    app: zadig-mongodb
+
