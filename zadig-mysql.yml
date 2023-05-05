@@ -1,0 +1,131 @@
+# 单节点 mysql,数据持久化，带mysql_exporter
+
+---
+# Configmap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zadig-mysql
+  namespace: zadig
+data:
+  mysql.cnf: |-
+    [mysql]
+    default-character-set=utf8
+    [mysql.server]
+    default-character-set=utf8
+    [mysqld_safe]
+    default-character-set=utf8
+    [client]
+    default-character-set=utf8
+    [mysqld]
+    character_set_server=utf8
+    init_connect='SET NAMES utf8'
+    max_connections=3000
+    slow_query_log=ON
+    slow_query_log_file=/tmp/mysql-slow.log
+    long_query_time=1
+    sql_mode=NO_UNSIGNED_SUBTRACTION,NO_ENGINE_SUBSTITUTION
+    lower_case_table_names=1
+
+---
+# PVC
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: zadig-mysql
+  namespace: zadig
+spec:
+  storageClassName: managed-nfs-storage
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+# Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zadig-mysql
+  namespace: zadig  
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: zadig-mysql
+  template:
+    metadata:
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9104"
+      labels:
+        app: zadig-mysql
+    spec:     
+      containers:
+      - name: zadig-mysql
+        image: mysql:5.7
+        ports:
+        - containerPort: 3306
+        env:
+        - name: MYSQL_ROOT_PASSWORD   
+          value: "zadig"
+        resources:
+          limits:
+            cpu: 2000m
+            memory: 512Mi
+          requests:
+            cpu: 2000m
+            memory: 512Mi
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/mysql
+        - name: config
+          mountPath: /etc/mysql/conf.d/mysql.cnf
+          subPath: mysql.cnf
+        # - name: localtime
+        #   readOnly: true
+        #   mountPath: /etc/localtime
+      - name: mysql-exporter-produce
+        image: prom/mysqld-exporter:latest
+        env:
+        - name: DATA_SOURCE_NAME
+          value: "root:zadig@(zadig-mysql:3306)/"
+        resources:
+          requests:
+            cpu: 100m
+            memory: 100Mi
+        ports:
+        - containerPort: 9104
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: zadig-mysql
+      - name: config      
+        configMap:
+          name: zadig-mysql
+      # - name: localtime
+      #   hostPath:
+      #     type: File
+      #     path: /usr/share/zoneinfo/UTC
+
+---
+# Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: zadig-mysql
+  namespace: zadig
+spec:
+  type: ClusterIP
+  ports:
+  - name: zadig-mysql
+    port: 3306
+    protocol: TCP
+    targetPort: 3306
+  - name: prom
+    port: 9104
+    targetPort: 9104    
+  selector:
+    app: zadig-mysql
+
