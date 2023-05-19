@@ -1,0 +1,136 @@
+---
+# ConfigMap
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: jumpserver-redis
+  namespace: ops
+data:
+  redis.conf: |-
+    dir /data
+    port 6379
+    bind 0.0.0.0
+    appendonly yes
+    protected-mode no
+    requirepass 6djMQkK5poyH0JwbHqwX
+    pidfile /data/redis.pid
+    logfile /data/access.log
+    maxmemory 1024mb  
+
+---
+# PVC
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: jumpserver-redis
+  namespace: ops
+spec:
+  storageClassName: managed-nfs-storage
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 5G
+
+---
+# Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jumpserver-redis
+  namespace: ops
+  labels:
+    app: jumpserver-redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jumpserver-redis
+  template:
+    metadata:
+      labels:
+        app: jumpserver-redis
+    spec:
+      # 进行初始化操作，修改系统配置，解决 Redis 启动时提示的警告信息
+      initContainers:
+        - name: system-init
+          image: busybox:1.32
+          imagePullPolicy: IfNotPresent
+          command:
+            - "sh"
+            - "-c"
+            - "echo 2000 > /proc/sys/net/core/somaxconn && echo never > /sys/kernel/mm/transparent_hugepage/enabled"
+          securityContext:
+            privileged: true
+            runAsUser: 0
+          volumeMounts:
+            - name: sys
+              mountPath: /sys
+      containers:
+      - name: jumpserver-redis
+        image: redis:6.2.7
+        command:
+          - "sh"
+          - "-c"
+          - "redis-server /usr/local/etc/redis/redis.conf"
+        ports:
+        - containerPort: 6379
+          protocol: TCP
+          name: redis
+        resources:
+          limits:
+            cpu: 1000m
+            memory: 1024Mi   #注意，这里的内存限制要和上面的 ConfigMap 中 maxmemory 参数限制的内存大小保持一致
+          requests:
+            cpu: 100m
+            memory: 100Mi
+        livenessProbe:
+          tcpSocket:
+            port: 6379
+          initialDelaySeconds: 300
+          timeoutSeconds: 1
+          periodSeconds: 10
+          successThreshold: 1
+          failureThreshold: 3
+        readinessProbe:
+          tcpSocket:
+            port: 6379
+          initialDelaySeconds: 5
+          timeoutSeconds: 1
+          periodSeconds: 10
+          successThreshold: 1
+          failureThreshold: 3
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        - name: config
+          mountPath:  /usr/local/etc/redis/redis.conf
+          subPath: redis.conf
+      volumes:
+      - name: config
+        configMap:
+          name: jumpserver-redis
+      - name: sys
+        hostPath:
+          path: /sys
+      - name: data
+        persistentVolumeClaim:
+          claimName: jumpserver-redis
+
+---
+# Service
+kind: Service
+apiVersion: v1
+metadata:
+  name: jumpserver-redis
+  namespace: ops
+spec:
+  type: ClusterIP
+  ports:
+    - name: jumpserver-redis
+      protocol: TCP
+      port: 6379
+      targetPort: redis
+  selector:
+    app: jumpserver-redis
+
