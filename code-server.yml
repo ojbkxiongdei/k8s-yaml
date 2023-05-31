@@ -1,0 +1,129 @@
+
+---
+# PVC
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: code-server
+  namespace: ops
+spec:
+  storageClassName: managed-nfs-storage
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 10Gi       
+
+---
+# Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: code-server
+  namespace: ops
+  labels:
+    app: code-server
+spec:
+  selector:
+    matchLabels:
+      app: code-server
+  replicas: 1
+  strategy:
+    rollingUpdate:
+      maxSurge: 2
+      maxUnavailable: 2
+  template:
+    metadata:
+      labels:
+        app: code-server
+    spec:
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+              claimName: code-server
+      initContainers:
+      - name: home-init
+        image: busybox
+        command: ["sh", "-c", "chown -R 1000:1000 /home/coder/project"]
+        volumeMounts:
+        - mountPath: "/home/coder/project"
+          name: data
+      containers:
+      - image: codercom/code-server:latest
+        imagePullPolicy: Always
+        securityContext:
+          runAsUser: 0
+        name: code
+        volumeMounts:
+          - mountPath: "/home/coder/project"
+            name: data
+        # resources:
+        #   limits:
+        #     cpu: "2"
+        #     memory: "2Gi"
+        ports:
+        - containerPort: 8080
+        env:
+          - name: PASSWORD
+            value: 23nndfn34nsnvin4ininsdfnsfie3
+
+---
+# Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: code-server
+  namespace: ops
+spec:
+  ports:
+    - port: 8080
+      protocol: TCP
+      targetPort: 8080
+  selector:
+    app: code-server
+  clusterIP: None
+
+---
+# Secert
+apiVersion: v1
+kind: Secret
+type: kubernetes.io/tls
+metadata:
+  name: xxx-con-tls-secret
+  namespace: ops
+data:
+  tls.crt: LSxxx
+  tls.key: LSxxx
+
+---
+# Ingress
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: code-server
+  namespace: ops
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+spec:
+  tls:
+  - hosts:
+      - code-server.xxx.com
+    secretName: xxx-con-tls-secret
+  rules:
+  - host: code-server.xxx.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: code-server
+            port:
+              number: 8080
+
+# 数据持久化到nas,域名访问，配置和插件目前还没做到持久化。
+# 上传插件
+# code-server并不是对接的 vscode 插件市场，搜到的插件大部分都已经过时。
+# 使用 vsix 安装是最佳的方式
+# vsix 插件市场 https://marketplace.visualstudio.com/vscode
+
