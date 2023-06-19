@@ -1,0 +1,103 @@
+# 向量数据库，for AI服务使用 安装vector插件的postgres https://github.com/pgvector/pgvector
+
+---
+# Secret
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pgvector
+  namespace: ops
+type: Opaque
+stringData:
+  POSTGRES_USER: postgres
+  POSTGRES_PASSWORD: xxx
+
+---
+# PVC
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: pgvector
+  namespace: ops
+  labels:
+    app: pgvector
+spec:
+  storageClassName: managed-nfs-storage
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+# Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pgvector
+  namespace: ops  
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pgvector
+  template:
+    metadata:
+      labels:
+        app: pgvector
+    spec:
+      volumes:
+      - name: pgvector
+        persistentVolumeClaim:
+          claimName: pgvector
+      containers:
+      - name: pgvector
+        image: ankane/pgvector:v0.4.0
+        volumeMounts:
+        - name: pgvector
+          mountPath: /var/lib/postgresql/data
+        envFrom:
+        - secretRef:
+            name: pgvector
+        ports:
+        - name: tcp
+          containerPort: 5432
+          protocol: TCP
+
+---
+# Service 
+apiVersion: v1
+kind: Service
+metadata:
+  name: pgvector
+  namespace: ops    
+spec:
+  sessionAffinity: ClientIP
+  ports:
+  - name: tcp
+    port: 5432
+    targetPort: 5432
+  selector:
+    app: pgvector
+
+---
+# Service nodeport
+apiVersion: v1
+kind: Service
+metadata:
+  name: pgvector-nodeport
+  namespace: ops
+spec:
+  selector:
+    app: pgvector
+  type: NodePort
+  ports:
+  - name: tcp
+    port: 5432
+    targetPort: 5432
+    nodePort: 30432
+    
+# psql  -U postgres -d postgres
+# 查看是否有安装vector
+# SELECT * FROM pg_available_extensions WHERE name = 'vector';
+# SELECT usename FROM pg_user;
